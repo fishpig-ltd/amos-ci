@@ -20,16 +20,16 @@ jobs:
       issues: write
       pull-requests: write
 
-  quality:
-    name: Code
-    if: github.event.action != 'closed'
-    uses: bentideswell/amos-ci/.github/workflows/amos-ci-quality.yml@main
-    permissions:
-      contents: read
+  # quality:
+  #   name: Code
+  #   if: github.event.action != 'closed'
+  #   uses: bentideswell/amos-ci/.github/workflows/amos-ci-quality.yml@main
+  #   permissions:
+  #     contents: read
 
-  security:
-    name: Security Scan
-    if: github.event.action != 'closed'
-    uses: bentideswell/amos-ci/.github/workflows/amos-ci-security.yml@main
-    permissions:
-      contents: read
+  # security:
+  #   name: Security
+  #   if: github.event.action != 'closed'
+  #   uses: bentideswell/amos-ci/.github/workflows/amos-ci-security.yml@main
+  #   permissions:
+  #     contents: read

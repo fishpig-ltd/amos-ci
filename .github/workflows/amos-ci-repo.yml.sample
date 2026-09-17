@@ -11,7 +11,7 @@
 #      a normal caller workflow, so local jobs can sit alongside the `uses:`
 #      job without affecting it.
 
-name: Amos CI
+name: Amos
 
 on:
   pull_request:
@@ -25,7 +25,7 @@ on:
 
 jobs:
   amos-ci:
-    name: Amos CI
+    name: CI
     uses: bentideswell/amos-ci/.github/workflows/amos-ci.yml@main
     permissions:
       contents: write

@@ -5,7 +5,7 @@ on:
 
 jobs:
   security:
-    name: Checks
+    name: Security Checks
     runs-on: ubuntu-latest
     steps:
       - name: No security checks configured yet

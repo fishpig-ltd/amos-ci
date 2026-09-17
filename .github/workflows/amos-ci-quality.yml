@@ -4,8 +4,14 @@ on:
   workflow_call:
 
 jobs:
-  quality:
-    name: Checks
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: No quality checks configured yet
+        run: echo "Quality checks are not yet implemented."
+  test:
+    name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - name: No quality checks configured yet

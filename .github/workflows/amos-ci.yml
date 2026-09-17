@@ -21,7 +21,7 @@ jobs:
       pull-requests: write
 
   quality:
-    name: Quality
+    name: Code
     if: github.event.action != 'closed'
     uses: bentideswell/amos-ci/.github/workflows/amos-ci-quality.yml@main
     permissions:

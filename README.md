@@ -30,7 +30,7 @@ amos-<repo>/.github/workflows/amos-ci.yml   (per-repo caller, copied from the sa
 
 1. Copy [`.github/workflows/amos-ci-repo.yml.sample`](.github/workflows/amos-ci-repo.yml.sample) into the target repo as `.github/workflows/amos-ci.yml`.
 2. Confirm the `uses:` line still points at the correct `owner/amos-ci` — update it if the org changes.
-3. Pin the version tag (`@v1`) to a real release of this repo. Don't point at `@main` — that would mean a bad change here breaks every `amos-*` repo's CI simultaneously with no chance to catch it on one repo first.
+3. Point the `uses:` line at `@main`. Every `amos-*` repo tracks `main` directly, so a change here takes effect everywhere on the next PR run — there's no per-repo version pinning.
 4. Add any repo-specific jobs underneath the shared `amos-ci` job — it's a normal caller workflow, so local jobs run alongside the shared one without needing changes here.
 
 ### Branch ruleset

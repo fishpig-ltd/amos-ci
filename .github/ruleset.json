@@ -39,15 +39,9 @@
       "parameters": {
         "do_not_enforce_on_create": true,
         "required_status_checks": [
-          {
-            "context": "Workflow / Branch Protection"
-          },
-          {
-            "context": "Quality / Checks"
-          },
-          {
-            "context": "Security / Checks"
-          }
+          { "context": "Amos CI / Workflow / Branch Protection" },
+          { "context": "Amos CI / Quality / Checks" },
+          { "context": "Amos CI / Security / Checks" }
         ],
         "strict_required_status_checks_policy": false
       }

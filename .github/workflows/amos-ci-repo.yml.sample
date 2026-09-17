@@ -5,9 +5,8 @@
 #      (drop the .sample extension so GitHub Actions picks it up).
 #   2. Confirm the owner/repo below still points at the central amos-ci
 #      repo (update it if the org/repo name changes).
-#   3. Pin @v1 to the amos-ci release you want this repo to run —
-#      do not point at @main, so a bad change there can't break every amos-*
-#      repo's CI at once.
+#   3. Leave this pointed at @main — all amos-* repos track main directly,
+#      so a change to amos-ci takes effect everywhere on the next PR run.
 #   4. Add any repo-specific jobs/steps below the shared one — this file is
 #      a normal caller workflow, so local jobs can sit alongside the `uses:`
 #      job without affecting it.
@@ -27,7 +26,7 @@ on:
 jobs:
   amos-ci:
     name: Amos CI
-    uses: bentideswell/amos-ci/.github/workflows/amos-ci.yml@v1
+    uses: bentideswell/amos-ci/.github/workflows/amos-ci.yml@main
     permissions:
       contents: write
       issues: write

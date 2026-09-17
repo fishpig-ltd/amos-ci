@@ -1,0 +1,12 @@
+name: Amos / Quality
+
+on:
+  workflow_call:
+
+jobs:
+  quality:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: No quality checks configured yet
+        run: echo "Quality checks are not yet implemented."

@@ -1,0 +1,452 @@
+name: Amos / Workflow
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+
+jobs:
+  cleanup:
+    name: Branch Cleanup
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Delete merged topic/hotfix branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+
+          # Never try to delete branches from a fork.
+          if [[ "$HEAD_REPO" != "$GH_REPO" ]]; then
+            echo "PR came from $HEAD_REPO; skipping branch deletion."
+            exit 0
+          fi
+
+          case "$HEAD_REF" in
+            feature/*|bugfix/*|chore/*|hotfix/*)
+              echo "Deleting merged branch: $HEAD_REF"
+              gh api \
+                --method DELETE \
+                "repos/$GH_REPO/git/refs/heads/$HEAD_REF"
+              ;;
+            dev|uat|main)
+              echo "Permanent branch $HEAD_REF will not be deleted."
+              ;;
+            *)
+              echo "Branch $HEAD_REF does not match an auto-delete pattern; leaving it in place."
+              ;;
+          esac
+
+  policy:
+    name: Branch Protection
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Evaluate Git policy
+        id: policy
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          head="$HEAD_REF"
+          base="$BASE_REF"
+
+          valid="true"
+          pr_type=""
+          merge_method=""
+          label=""
+          freshness_mode="none"
+          reason=""
+
+          topic_regex='^(feature|bugfix|chore)/[a-z0-9]+(-[a-z0-9]+)*$'
+          hotfix_regex='^hotfix/[a-z0-9]+(-[a-z0-9]+)*$'
+
+          invalid() {
+            valid="false"
+            reason="$1"
+          }
+
+          case "$head" in
+            dev)
+              if [[ "$base" == "uat" ]]; then
+                pr_type="Promotion"
+                merge_method="merge"
+                label="merge:merge-commit"
+                freshness_mode="target-contained-in-source"
+              else
+                invalid "dev may only target uat."
+              fi
+              ;;
+
+            uat)
+              if [[ "$base" == "main" ]]; then
+                pr_type="Promotion"
+                merge_method="merge"
+                label="merge:merge-commit"
+                freshness_mode="target-contained-in-source"
+              elif [[ "$base" == "dev" ]]; then
+                pr_type="Backport"
+                merge_method="merge"
+                label="merge:merge-commit"
+                freshness_mode="none"
+              else
+                invalid "uat may only target main (promotion) or dev (backport)."
+              fi
+              ;;
+
+            main)
+              if [[ "$base" == "uat" || "$base" == "dev" ]]; then
+                pr_type="Cascade/backport"
+                merge_method="merge"
+                label="merge:merge-commit"
+                freshness_mode="none"
+              else
+                invalid "main may only target uat or dev as part of a hotfix cascade/backport."
+              fi
+              ;;
+
+            *)
+              if [[ "$head" =~ $topic_regex ]]; then
+                if [[ "$base" == "dev" ]]; then
+                  case "$head" in
+                    feature/*) pr_type="Feature" ;;
+                    bugfix/*)  pr_type="Bugfix" ;;
+                    chore/*)   pr_type="Chore" ;;
+                  esac
+
+                  merge_method="squash"
+                  label="merge:squash"
+                  freshness_mode="source-must-contain-target"
+                else
+                  invalid "feature/*, bugfix/* and chore/* branches may only target dev."
+                fi
+
+              elif [[ "$head" =~ $hotfix_regex ]]; then
+                if [[ "$base" == "uat" || "$base" == "main" ]]; then
+                  pr_type="Hotfix"
+                  merge_method="squash"
+                  label="merge:squash"
+                  freshness_mode="source-must-contain-target"
+                else
+                  invalid "hotfix/* branches may only target uat or main."
+                fi
+
+              else
+                invalid "Invalid branch name. Use feature/<kebab-case>, bugfix/<kebab-case>, hotfix/<kebab-case>, chore/<kebab-case>, or dev/uat/main."
+              fi
+              ;;
+          esac
+
+          {
+            echo "valid=$valid"
+            echo "pr_type=$pr_type"
+            echo "merge_method=$merge_method"
+            echo "label=$label"
+            echo "freshness_mode=$freshness_mode"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check branch freshness / promotion safety
+        id: freshness
+        if: steps.policy.outputs.valid == 'true' && steps.policy.outputs.freshness_mode != 'none'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          MODE: ${{ steps.policy.outputs.freshness_mode }}
+        run: |
+          set -euo pipefail
+
+          # GitHub's compare API returns:
+          # - "behind"    when HEAD is behind BASE
+          # - "ahead"     when HEAD contains BASE and has additional commits
+          # - "identical" when both point at the same commit
+          # - "diverged"  when each side has commits the other side lacks
+          #
+          # We compare BASE...HEAD. For the checks below, BASE must be fully
+          # contained in HEAD. This is safe for topic/hotfix PRs and also
+          # prevents promotion over an un-backported hotfix.
+
+          comparison="$(
+            gh api \
+              "repos/$GH_REPO/compare/$BASE_REF...$HEAD_REF" \
+              --jq '{status: .status, ahead_by: .ahead_by, behind_by: .behind_by}'
+          )"
+
+          status="$(jq -r '.status' <<<"$comparison")"
+          ahead_by="$(jq -r '.ahead_by' <<<"$comparison")"
+          behind_by="$(jq -r '.behind_by' <<<"$comparison")"
+
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "ahead_by=$ahead_by" >> "$GITHUB_OUTPUT"
+          echo "behind_by=$behind_by" >> "$GITHUB_OUTPUT"
+
+          case "$status" in
+            ahead|identical)
+              echo "safe=true" >> "$GITHUB_OUTPUT"
+              ;;
+
+            behind|diverged)
+              echo "safe=false" >> "$GITHUB_OUTPUT"
+
+              if [[ "$MODE" == "source-must-contain-target" ]]; then
+                echo "::error::The source branch does not contain the latest $BASE_REF. Update $HEAD_REF from $BASE_REF before merging."
+              else
+                echo "::error::$BASE_REF contains commits that are not present in $HEAD_REF. Backport/cascade those changes first; do not merge $HEAD_REF into $BASE_REF yet."
+              fi
+
+              exit 1
+              ;;
+
+            *)
+              echo "::error::Unexpected compare status: $status"
+              exit 1
+              ;;
+          esac
+
+      - name: Build policy summary
+        if: always()
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          VALID: ${{ steps.policy.outputs.valid }}
+          PR_TYPE: ${{ steps.policy.outputs.pr_type }}
+          MERGE_METHOD: ${{ steps.policy.outputs.merge_method }}
+          FRESHNESS_MODE: ${{ steps.policy.outputs.freshness_mode }}
+          REASON: ${{ steps.policy.outputs.reason }}
+          FRESHNESS_STATUS: ${{ steps.freshness.outputs.status }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## Amos Git Policy"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source | \`$HEAD_REF\` |"
+            echo "| Target | \`$BASE_REF\` |"
+
+            if [[ "$VALID" != "true" ]]; then
+              echo "| Result | **INVALID** |"
+              echo
+              echo "❌ $REASON"
+              exit 0
+            fi
+
+            echo "| PR type | $PR_TYPE |"
+
+            if [[ "$MERGE_METHOD" == "squash" ]]; then
+              echo "| Required merge method | **SQUASH** |"
+            else
+              echo "| Required merge method | **MERGE COMMIT** |"
+            fi
+
+            case "$FRESHNESS_MODE" in
+              source-must-contain-target)
+                if [[ "$FRESHNESS_STATUS" == "ahead" || "$FRESHNESS_STATUS" == "identical" ]]; then
+                  echo "| Branch freshness | ✅ Source contains latest target |"
+                else
+                  echo "| Branch freshness | ❌ Source is not based on latest target |"
+                fi
+                ;;
+
+              target-contained-in-source)
+                if [[ "$FRESHNESS_STATUS" == "ahead" || "$FRESHNESS_STATUS" == "identical" ]]; then
+                  echo "| Promotion safety | ✅ Target has no un-backported commits |"
+                else
+                  echo "| Promotion safety | ❌ Target contains commits missing from source |"
+                fi
+                ;;
+
+              none)
+                echo "| Branch freshness | Not required for this backport/cascade |"
+                ;;
+            esac
+
+            echo
+            echo "✅ Branch name and PR direction comply with the Amos workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure policy labels exist
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh label create "merge:squash" \
+            --repo "$GH_REPO" \
+            --description "This PR must use Squash and merge" \
+            --color "1D76DB" \
+            --force
+
+          gh label create "merge:merge-commit" \
+            --repo "$GH_REPO" \
+            --description "This PR must use Create a merge commit" \
+            --color "5319E7" \
+            --force
+
+      - name: Apply merge-method label
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          VALID: ${{ steps.policy.outputs.valid }}
+          REQUIRED_LABEL: ${{ steps.policy.outputs.label }}
+        run: |
+          set -euo pipefail
+
+          gh pr edit "$PR_NUMBER" --remove-label "merge:squash" 2>/dev/null || true
+          gh pr edit "$PR_NUMBER" --remove-label "merge:merge-commit" 2>/dev/null || true
+
+          if [[ "$VALID" == "true" ]]; then
+            gh pr edit "$PR_NUMBER" --add-label "$REQUIRED_LABEL"
+          fi
+
+      - name: Create or update policy comment
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          VALID: ${{ steps.policy.outputs.valid }}
+          PR_TYPE: ${{ steps.policy.outputs.pr_type }}
+          MERGE_METHOD: ${{ steps.policy.outputs.merge_method }}
+          FRESHNESS_MODE: ${{ steps.policy.outputs.freshness_mode }}
+          FRESHNESS_STATUS: ${{ steps.freshness.outputs.status }}
+          REASON: ${{ steps.policy.outputs.reason }}
+        run: |
+          set -euo pipefail
+
+          marker='<!-- amos-git-policy -->'
+          body_file="$(mktemp)"
+          trap 'rm -f "$body_file"' EXIT
+
+          {
+            echo "$marker"
+            echo "## Amos Git Policy"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source | \`$HEAD_REF\` |"
+            echo "| Target | \`$BASE_REF\` |"
+
+            if [[ "$VALID" != "true" ]]; then
+              echo "| Result | **INVALID** |"
+              echo
+              echo "❌ **This PR does not follow the branching policy and cannot be merged.**"
+              echo
+              echo "$REASON"
+            else
+              echo "| PR type | $PR_TYPE |"
+
+              if [[ "$MERGE_METHOD" == "squash" ]]; then
+                echo "| Required merge method | **SQUASH** |"
+              else
+                echo "| Required merge method | **MERGE COMMIT** |"
+              fi
+
+              case "$FRESHNESS_MODE" in
+                source-must-contain-target)
+                  if [[ "$FRESHNESS_STATUS" == "ahead" || "$FRESHNESS_STATUS" == "identical" ]]; then
+                    echo "| Branch freshness | ✅ Up to date |"
+                  else
+                    echo "| Branch freshness | ❌ Source does not contain latest target |"
+                  fi
+                  ;;
+                target-contained-in-source)
+                  if [[ "$FRESHNESS_STATUS" == "ahead" || "$FRESHNESS_STATUS" == "identical" ]]; then
+                    echo "| Promotion safety | ✅ No un-backported target commits |"
+                  else
+                    echo "| Promotion safety | ❌ Target has commits missing from source |"
+                  fi
+                  ;;
+                none)
+                  echo "| Branch freshness | Not required for this backport/cascade |"
+                  ;;
+              esac
+
+              echo
+
+              if [[ "$FRESHNESS_MODE" == "source-must-contain-target" ]] && \
+                 [[ "$FRESHNESS_STATUS" != "ahead" && "$FRESHNESS_STATUS" != "identical" ]]; then
+                echo "❌ **This PR is not ready to merge.**"
+                echo
+                echo "Update \`$HEAD_REF\` from \`$BASE_REF\`, then push the updated source branch."
+              elif [[ "$FRESHNESS_MODE" == "target-contained-in-source" ]] && \
+                   [[ "$FRESHNESS_STATUS" != "ahead" && "$FRESHNESS_STATUS" != "identical" ]]; then
+                echo "❌ **This promotion is not ready to merge.**"
+                echo
+                echo "\`$BASE_REF\` contains commits that are not present in \`$HEAD_REF\`. Complete the required backport/cascade first."
+                echo
+                echo "> Do **not** merge \`$BASE_REF\` into \`$HEAD_REF\` merely to satisfy this check."
+              else
+                echo "✅ This PR follows the branching policy."
+
+                if [[ "$MERGE_METHOD" == "squash" ]]; then
+                  echo
+                  echo "> **When merging, use _Squash and merge_. Do not create a merge commit.**"
+                else
+                  echo
+                  echo "> **When merging, use _Create a merge commit_. Do not squash this PR.**"
+                fi
+              fi
+            fi
+
+            echo
+            echo "_This comment is maintained automatically by the Amos Git Policy workflow._"
+          } > "$body_file"
+
+          comment_id="$(
+            gh api "repos/$GH_REPO/issues/$PR_NUMBER/comments?per_page=100" \
+              --paginate \
+              --jq ".[] | select(.body | contains(\"$marker\")) | .id" \
+              | head -n 1
+          )"
+
+          if [[ -n "$comment_id" ]]; then
+            gh api \
+              --method PATCH \
+              "repos/$GH_REPO/issues/comments/$comment_id" \
+              --raw-field "body=$(cat "$body_file")" \
+              >/dev/null
+          else
+            gh api \
+              --method POST \
+              "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
+              --raw-field "body=$(cat "$body_file")" \
+              >/dev/null
+          fi
+
+      - name: Enforce PR direction
+        if: steps.policy.outputs.valid != 'true'
+        shell: bash
+        env:
+          REASON: ${{ steps.policy.outputs.reason }}
+        run: |
+          echo "::error::$REASON"
+          exit 1

@@ -1,0 +1,35 @@
+name: Amos CI
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - ready_for_review
+      - closed
+  workflow_call:
+
+jobs:
+  workflow:
+    name: Workflow
+    uses: ./.github/workflows/amos-ci-workflow.yml
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+  quality:
+    name: Quality
+    if: github.event.action != 'closed'
+    uses: ./.github/workflows/amos-ci-quality.yml
+    permissions:
+      contents: read
+
+  security:
+    name: Security
+    if: github.event.action != 'closed'
+    uses: ./.github/workflows/amos-ci-security.yml
+    permissions:
+      contents: read

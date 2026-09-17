@@ -14,7 +14,7 @@ on:
 jobs:
   workflow:
     name: Workflow
-    uses: ./.github/workflows/amos-ci-workflow.yml
+    uses: bentideswell/amos-ci/.github/workflows/amos-ci-workflow.yml@main
     permissions:
       contents: write
       issues: write
@@ -23,13 +23,13 @@ jobs:
   quality:
     name: Quality
     if: github.event.action != 'closed'
-    uses: ./.github/workflows/amos-ci-quality.yml
+    uses: bentideswell/amos-ci/.github/workflows/amos-ci-quality.yml@main
     permissions:
       contents: read
 
   security:
     name: Security
     if: github.event.action != 'closed'
-    uses: ./.github/workflows/amos-ci-security.yml
+    uses: bentideswell/amos-ci/.github/workflows/amos-ci-security.yml@main
     permissions:
       contents: read

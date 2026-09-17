@@ -10,45 +10,6 @@ permissions:
 
 
 jobs:
-  cleanup:
-    name: Branch Cleanup
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Delete merged topic/hotfix branch
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        run: |
-          set -euo pipefail
-
-          # Never try to delete branches from a fork.
-          if [[ "$HEAD_REPO" != "$GH_REPO" ]]; then
-            echo "PR came from $HEAD_REPO; skipping branch deletion."
-            exit 0
-          fi
-
-          case "$HEAD_REF" in
-            feature/*|bugfix/*|chore/*|hotfix/*)
-              echo "Deleting merged branch: $HEAD_REF"
-              gh api \
-                --method DELETE \
-                "repos/$GH_REPO/git/refs/heads/$HEAD_REF"
-              ;;
-            dev|uat|main)
-              echo "Permanent branch $HEAD_REF will not be deleted."
-              ;;
-            *)
-              echo "Branch $HEAD_REF does not match an auto-delete pattern; leaving it in place."
-              ;;
-          esac
-
   policy:
     name: Branch Protection
     if: github.event.action != 'closed'
@@ -450,3 +411,42 @@ jobs:
         run: |
           echo "::error::$REASON"
           exit 1
+
+  cleanup:
+    name: Branch Cleanup
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Delete merged topic/hotfix branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+
+          # Never try to delete branches from a fork.
+          if [[ "$HEAD_REPO" != "$GH_REPO" ]]; then
+            echo "PR came from $HEAD_REPO; skipping branch deletion."
+            exit 0
+          fi
+
+          case "$HEAD_REF" in
+            feature/*|bugfix/*|chore/*|hotfix/*)
+              echo "Deleting merged branch: $HEAD_REF"
+              gh api \
+                --method DELETE \
+                "repos/$GH_REPO/git/refs/heads/$HEAD_REF"
+              ;;
+            dev|uat|main)
+              echo "Permanent branch $HEAD_REF will not be deleted."
+              ;;
+            *)
+              echo "Branch $HEAD_REF does not match an auto-delete pattern; leaving it in place."
+              ;;
+          esac
